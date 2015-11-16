@@ -1,77 +1,85 @@
 package reactive
 
-import akka.actor.{Actor, ActorSystem, Props}
+import akka.actor.{Actor, ActorRef, ActorSystem, Props}
 import akka.event.LoggingReceive
-import reactive.AuctionMessage.{ItemSold, Bid}
+import reactive.Auction.{BidTimerExpired, DeleteTimerExpired, Initialize, Relist}
+import reactive.AuctionMessage.{Bid, ItemSold}
+
+import scala.concurrent.ExecutionContext.Implicits.global
+import scala.concurrent.duration._
 
 object Auction {
-  def props(price: BigDecimal): Props = Props(new Auction(price))
+  def props(seller: ActorRef, price: BigDecimal): Props = Props(new Auction(seller, price))
 
+  case object Initialize
+
+  case object BidTimerExpired
+
+  case object DeleteTimerExpired
+
+  case object Relist
+
+  val BidTimerDuration = 10 second
+  val DeleteTimerDuration = 10 second
 }
 
-class Auction(var startingPrice: BigDecimal) extends Actor {
+class Auction(val seller: ActorRef, val startingPrice: BigDecimal) extends Actor {
+  self ! Initialize
 
-  var bidCounter = 0
+  override def receive = uninitialized
+
+  def uninitialized: Receive = LoggingReceive {
+    case Initialize =>
+      context.system.scheduler.scheduleOnce(Auction.BidTimerDuration, self, BidTimerExpired)
+      context become created
+    case _ => // ignore
+  }
 
   def sold(finalPrice: BigDecimal): Receive = LoggingReceive {
-    case _ => context stop self
+    case DeleteTimerExpired => context stop self
+    case _ => // ignore
   }
 
   def ignored: Receive = LoggingReceive {
-    ???
+    case DeleteTimerExpired => context stop self
+    case Relist =>
+      context.system.scheduler.scheduleOnce(Auction.BidTimerDuration, self, BidTimerExpired)
+      context become created
+    case _ => // ignore
   }
-
-  override def receive = created
 
   def created: Receive = LoggingReceive {
-    case Bid(amount) if amount > startingPrice => {
-      bidCounter += 1
-      context become activated(amount)
-    }
-    case Bid(amount) => {
-      Console println "bid too low"
-    }
-    case _ => Console println "unsupported message"
+    case Bid(amount) if amount > startingPrice => context become activated(amount, sender)
+    case BidTimerExpired =>
+      context.system.scheduler.scheduleOnce(Auction.DeleteTimerDuration, self, DeleteTimerExpired)
+      context become ignored
+    case _ => // ignore
   }
 
-  def activated(currentPrice: BigDecimal): Receive = LoggingReceive {
-    case Bid(amount) if amount > currentPrice => {
-      bidCounter += 1
-      if (bidCounter < 2) {
-        println(s"${self.path.name} bid $amount accepted")
-        context become activated(amount)
-      }
-      else {
-        println(s"${self.path.name} started at $startingPrice and was sold at $amount!")
-        sender ! ItemSold
-        context become sold(amount)
-      }
-    }
-    case Bid(amount) =>
-      println(s"${self.path.name} bid $amount too low, current price is $currentPrice")
+  def activated(currentPrice: BigDecimal, highestBidder: ActorRef): Receive = LoggingReceive {
+    case Bid(amount) if amount > currentPrice => context become activated(amount, sender)
+    case BidTimerExpired =>
+      context.system.scheduler.scheduleOnce(Auction.DeleteTimerDuration, self, DeleteTimerExpired)
+      seller ! ItemSold
+      highestBidder ! ItemSold
+      context become sold(currentPrice)
+    case _ => // ignore
   }
 
 }
 
 object AuctionApp extends App {
   val system = ActorSystem("Reactive2")
-
-  val auction1 = system.actorOf(Auction.props(40), "auction1")
-  val auction2 = system.actorOf(Auction.props(10), "auction2")
-  val auction3 = system.actorOf(Auction.props(1), "auction3")
-  val auction4 = system.actorOf(Auction.props(100), "auction4")
-
+  val seller1 = system.actorOf(Props[Seller], "seller1")
+  val auction1 = system.actorOf(Auction.props(seller1, 40), "auction1")
+  val auction2 = system.actorOf(Auction.props(seller1, 10), "auction2")
+  val auction3 = system.actorOf(Auction.props(seller1, 1), "auction3")
+  val auction4 = system.actorOf(Auction.props(seller1, 100), "auction4")
   val auctionList = List(auction1, auction2, auction3, auction4)
-  //  auction1 ! Bid(20)
-  //  auction1 ! Bid(303)
-  //  auction1 ! Bid(302)
-  //  auction1 ! Bid(305)
-  //  auction1 ! Bid(306)
-  //  auction1 ! Bid(306)
 
   val buyer1 = system.actorOf(Buyer.props(auctionList), "buyer1")
   val buyer2 = system.actorOf(Buyer.props(auctionList), "buyer2")
-  val buyer3 = system.actorOf(Buyer.props(auctionList), "buyer")
+  val buyer3 = system.actorOf(Buyer.props(auctionList), "buyer3")
 
   val buyersList = List(buyer1, buyer2, buyer3)
 
@@ -82,4 +90,5 @@ object AuctionApp extends App {
   }
 
   system.awaitTermination()
+
 }

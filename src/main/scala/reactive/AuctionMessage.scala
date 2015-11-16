@@ -7,5 +7,6 @@ object AuctionMessage {
   case object BidAccepted
   case object BidRejected
   case object ItemSold
-
+  case object BidTimerExpired
+  case object DeleteTimerExpired
 }
