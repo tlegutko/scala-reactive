@@ -1,80 +1,105 @@
 package reactive
 
-import akka.actor.{Actor, ActorRef, ActorSystem, Props}
-import akka.event.LoggingReceive
-import reactive.Auction.{BidTimerExpired, DeleteTimerExpired, Initialize, Relist}
-import reactive.AuctionMessage.{Bid, ItemSold}
+import akka.actor._
+import reactive.AuctionMessage.{Relist, StartAuction, ItemSold, Bid}
 
-import scala.concurrent.ExecutionContext.Implicits.global
 import scala.concurrent.duration._
 
-object Auction {
-  def props(seller: ActorRef, price: BigDecimal): Props = Props(new Auction(seller, price))
+sealed trait AuctionState
 
-  case object Initialize
+case object InitialState extends AuctionState
 
-  case object BidTimerExpired
+case object Created extends AuctionState
 
-  case object DeleteTimerExpired
+case object Activated extends AuctionState
 
-  case object Relist
+case object Ignored extends AuctionState
 
-  val BidTimerDuration = 10 second
-  val DeleteTimerDuration = 10 second
+case object Sold extends AuctionState
+
+
+sealed trait AuctionData
+
+case object Uninitialized extends AuctionData
+
+final case class InitializedAuction(seller: ActorRef, startingPrice: BigDecimal) extends AuctionData {
+  require(startingPrice > 0)
 }
 
-class Auction(val seller: ActorRef, val startingPrice: BigDecimal) extends Actor {
-  self ! Initialize
+final case class ActivatedAuction(highestBidder: ActorRef, seller: ActorRef, currentPrice: BigDecimal) extends AuctionData {
+  require(currentPrice > 0)
+}
 
-  override def receive = uninitialized
+object Timer {
+  val BidDuration = 10 second
+  val DeleteDuration = 10 second
+}
 
-  def uninitialized: Receive = LoggingReceive {
-    case Initialize =>
-      context.system.scheduler.scheduleOnce(Auction.BidTimerDuration, self, BidTimerExpired)
-      context become created
-    case _ => // ignore
+class Auction extends FSM[AuctionState, AuctionData] {
+
+  startWith(InitialState, Uninitialized)
+
+  when(InitialState) {
+    case Event(StartAuction(startingPrice), Uninitialized) =>
+      goto(Created) using InitializedAuction(sender(), startingPrice)
   }
 
-  def sold(finalPrice: BigDecimal): Receive = LoggingReceive {
-    case DeleteTimerExpired => context stop self
-    case _ => // ignore
+  when(Created, stateTimeout = Timer.BidDuration) {
+    case Event(Bid(amount), auctionData: InitializedAuction) if amount > auctionData.startingPrice =>
+      goto(Activated) using ActivatedAuction(sender(), auctionData.seller, amount)
+    case Event(Bid(amount), auctionData: InitializedAuction) =>
+      log.info(s"bid $amount too low (current price: ${auctionData.startingPrice})")
+      stay()
+    case Event(StateTimeout, auctionData: InitializedAuction) =>
+      goto(Ignored) using auctionData
   }
 
-  def ignored: Receive = LoggingReceive {
-    case DeleteTimerExpired => context stop self
-    case Relist =>
-      context.system.scheduler.scheduleOnce(Auction.BidTimerDuration, self, BidTimerExpired)
-      context become created
-    case _ => // ignore
+  when(Ignored, stateTimeout = Timer.DeleteDuration) {
+    case Event(Relist, auctionData: InitializedAuction) =>
+      goto(Created) using auctionData
+    case Event(StateTimeout, auctionData: InitializedAuction) =>
+      stop()
   }
 
-  def created: Receive = LoggingReceive {
-    case Bid(amount) if amount > startingPrice => context become activated(amount, sender)
-    case BidTimerExpired =>
-      context.system.scheduler.scheduleOnce(Auction.DeleteTimerDuration, self, DeleteTimerExpired)
-      context become ignored
-    case _ => // ignore
+  when(Activated, stateTimeout = Timer.BidDuration) {
+    case Event(Bid(amount), auctionData: ActivatedAuction) if amount > auctionData.currentPrice =>
+      stay using ActivatedAuction(sender(), auctionData.seller, amount)
+    case Event(Bid(amount), auctionData: ActivatedAuction) =>
+      log.info(s"$stateName: bid $amount too low (current price: ${auctionData.currentPrice})")
+      stay()
+    case Event(StateTimeout, auctionData: ActivatedAuction) =>
+      auctionData.seller ! ItemSold
+      auctionData.highestBidder ! ItemSold
+      goto(Sold) using auctionData
   }
 
-  def activated(currentPrice: BigDecimal, highestBidder: ActorRef): Receive = LoggingReceive {
-    case Bid(amount) if amount > currentPrice => context become activated(amount, sender)
-    case BidTimerExpired =>
-      context.system.scheduler.scheduleOnce(Auction.DeleteTimerDuration, self, DeleteTimerExpired)
-      seller ! ItemSold
-      highestBidder ! ItemSold
-      context become sold(currentPrice)
-    case _ => // ignore
+  when(Sold, stateTimeout = Timer.DeleteDuration) {
+    case Event(StateTimeout, auctionData: ActivatedAuction) =>
+      stop()
   }
 
+  whenUnhandled {
+    case Event(e, s) =>
+      log.warning("received unhandled request {} in state {}/{}", e, stateName, s)
+      stay()
+  }
+
+  initialize()
 }
 
 object AuctionApp extends App {
   val system = ActorSystem("Reactive2")
   val seller1 = system.actorOf(Props[Seller], "seller1")
-  val auction1 = system.actorOf(Auction.props(seller1, 40), "auction1")
-  val auction2 = system.actorOf(Auction.props(seller1, 10), "auction2")
-  val auction3 = system.actorOf(Auction.props(seller1, 1), "auction3")
-  val auction4 = system.actorOf(Auction.props(seller1, 100), "auction4")
+
+  val auction1 = system.actorOf(Props[Auction], "auction1")
+  val auction2 = system.actorOf(Props[Auction], "auction2")
+  val auction3 = system.actorOf(Props[Auction], "auction3")
+  val auction4 = system.actorOf(Props[Auction], "auction4")
+  seller1 ! Seller.StartAuction(auction1)
+  seller1 ! Seller.StartAuction(auction2)
+  seller1 ! Seller.StartAuction(auction3)
+  seller1 ! Seller.StartAuction(auction4)
+
   val auctionList = List(auction1, auction2, auction3, auction4)
 
   val buyer1 = system.actorOf(Buyer.props(auctionList), "buyer1")

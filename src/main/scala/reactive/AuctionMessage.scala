@@ -1,12 +1,15 @@
 package reactive
 
 object AuctionMessage {
-  case class Bid(amount: BigDecimal) {
+  final case class StartAuction(startingPrice: BigDecimal) {
+    require(startingPrice > 0)
+  }
+
+  final case class Bid(amount: BigDecimal) {
     require(amount > 0)
   }
-  case object BidAccepted
-  case object BidRejected
+
+  case object Relist
+
   case object ItemSold
-  case object BidTimerExpired
-  case object DeleteTimerExpired
 }
