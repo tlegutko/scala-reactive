@@ -1,7 +1,7 @@
 package reactive
 
 import akka.actor._
-import reactive.AuctionMessage.{Relist, StartAuction, ItemSold, Bid}
+import reactive.AuctionMessage.{Bid, ItemSold, Relist, StartAuction}
 
 import scala.concurrent.duration._
 
@@ -31,8 +31,8 @@ final case class ActivatedAuction(highestBidder: ActorRef, seller: ActorRef, cur
 }
 
 object Timer {
-  val BidDuration = 10 second
-  val DeleteDuration = 10 second
+  val BidDuration = 3 seconds
+  val DeleteDuration = 3 seconds
 }
 
 class Auction extends FSM[AuctionState, AuctionData] {
@@ -41,6 +41,7 @@ class Auction extends FSM[AuctionState, AuctionData] {
 
   when(InitialState) {
     case Event(StartAuction(startingPrice), Uninitialized) =>
+      context.actorSelection("/user/" + AuctionSearch.Name) ! AuctionSearch.Register
       goto(Created) using InitializedAuction(sender(), startingPrice)
   }
 
@@ -89,29 +90,20 @@ class Auction extends FSM[AuctionState, AuctionData] {
 
 object AuctionApp extends App {
   val system = ActorSystem("Reactive2")
-  val seller1 = system.actorOf(Props[Seller], "seller1")
 
-  val auction1 = system.actorOf(Props[Auction], "auction1")
-  val auction2 = system.actorOf(Props[Auction], "auction2")
-  val auction3 = system.actorOf(Props[Auction], "auction3")
-  val auction4 = system.actorOf(Props[Auction], "auction4")
-  seller1 ! Seller.StartAuction(auction1)
-  seller1 ! Seller.StartAuction(auction2)
-  seller1 ! Seller.StartAuction(auction3)
-  seller1 ! Seller.StartAuction(auction4)
+  val auctionList = List("czadowy_komputer", "krzeslo_mistrzow", "krzywy_stol", "zamkniete_drzwi")
 
-  val auctionList = List(auction1, auction2, auction3, auction4)
+  val auctionSearch = system.actorOf(Props[AuctionSearch], AuctionSearch.Name)
+  val seller1 = system.actorOf(Seller.props(auctionList), "seller1")
 
-  val buyer1 = system.actorOf(Buyer.props(auctionList), "buyer1")
-  val buyer2 = system.actorOf(Buyer.props(auctionList), "buyer2")
-  val buyer3 = system.actorOf(Buyer.props(auctionList), "buyer3")
+  val buyer1 = system.actorOf(Props[Buyer], "buyer1")
 
-  val buyersList = List(buyer1, buyer2, buyer3)
+  import system.dispatcher
 
-  val rand = scala.util.Random
-
-  for (i <- 1 to 5) {
-    for (buyer <- buyersList) buyer ! Bid(rand.nextInt(i * 200))
+  system.scheduler.scheduleOnce(1 second) {
+    buyer1 ! AuctionMessage.FindAndBid("komputer", 400)
+    buyer1 ! AuctionMessage.FindAndBid("krzeslo", 400)
+    buyer1 ! AuctionMessage.FindAndBid("stol", 400)
   }
 
   system.awaitTermination()

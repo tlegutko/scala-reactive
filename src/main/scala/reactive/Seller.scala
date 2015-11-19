@@ -1,19 +1,38 @@
 package reactive
 
-import akka.actor.{ActorRef, Actor}
-import akka.actor.Actor.Receive
+import akka.actor.{Actor, ActorRef, Props}
 import akka.event.LoggingReceive
 import reactive.AuctionMessage.ItemSold
+import reactive.Seller.Initialize
 
 object Seller {
+  def props(auctionTitles: List[String]): Props = Props(new Seller(auctionTitles))
+
   final case class StartAuction(auction: ActorRef)
+
+  case object Initialize
+
+  val MaxPrice = 300
 }
 
-class Seller extends Actor {
+class Seller(auctionTitles: List[String]) extends Actor {
   val rand = scala.util.Random
-  override def receive = LoggingReceive {
-    case Seller.StartAuction(auction) => auction ! AuctionMessage.StartAuction(rand.nextInt(300))
-    case ItemSold => println(s"${self.path.name} sold ${sender.path.name}!")
+  self ! Initialize
+
+  def uninitialized = LoggingReceive {
+    case Initialize =>
+      auctionTitles.foreach(title => {
+        val auction = context.system.actorOf(Props[Auction], title)
+        auction ! AuctionMessage.StartAuction(rand.nextInt(Seller.MaxPrice))
+      })
+      context become active
     case _ => // ignore
   }
+
+  def active = LoggingReceive {
+    case ItemSold => println(s"${self.path.name} sold ${sender().path.name}!")
+    case _ => // ignore
+  }
+
+  override def receive = uninitialized
 }
