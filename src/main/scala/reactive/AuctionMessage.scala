@@ -14,6 +14,14 @@ object AuctionMessage {
     require(amount > 0)
   }
 
+  final case class OutBid(amount: BigDecimal) {
+    require(amount > 0)
+  }
+
+  final case class BidAccepted(amount: BigDecimal) {
+    require(amount > 0)
+  }
+
   case object Relist
 
   case object ItemSold

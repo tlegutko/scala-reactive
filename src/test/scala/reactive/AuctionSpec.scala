@@ -20,6 +20,7 @@ class AuctionSpec extends TestKit(ActorSystem("Reactive2")) with WordSpecLike wi
       }
       expectMsg(AuctionSearch.AuctionList(List(auction)))
     }
+
     "send notifications when sold" in {
       val seller = TestProbe()
       val auction2 = system.actorOf(Props(classOf[Auction], seller.testActor, BigDecimal(20)), "auction2")
@@ -27,9 +28,23 @@ class AuctionSpec extends TestKit(ActorSystem("Reactive2")) with WordSpecLike wi
       import system.dispatcher
       system.scheduler.scheduleOnce(200 milliseconds) {
         auction2 ! AuctionMessage.Bid(30)
+
       }
+      expectMsg(AuctionMessage.BidAccepted(30))
       seller.expectMsg(4 seconds, AuctionMessage.ItemSold)
       expectMsg(AuctionMessage.ItemSold)
+    }
+
+    "notify buyer when his offer is outbid" in {
+      val seller = TestProbe()
+      val auction3 = system.actorOf(Props(classOf[Auction], seller.testActor, BigDecimal(20)), "auction3")
+
+      import system.dispatcher
+      system.scheduler.scheduleOnce(200 milliseconds) {
+        auction3 ! AuctionMessage.Bid(30)
+        auction3 ! AuctionMessage.Bid(35)
+        expectMsg(AuctionMessage.OutBid(35))
+      }
     }
   }
 }

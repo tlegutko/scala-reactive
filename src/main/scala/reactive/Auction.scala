@@ -54,6 +54,7 @@ class Auction(seller: ActorRef, startingPrice: BigDecimal) extends FSM[AuctionSt
 
   when(Created, stateTimeout = Timer.BidDuration) {
     case Event(Bid(amount), auctionData: InitializedAuction) if amount > auctionData.startingPrice =>
+      sender ! AuctionMessage.BidAccepted(amount)
       goto(Activated) using ActivatedAuction(auctionData.seller, sender(), amount)
     case Event(Bid(amount), auctionData: InitializedAuction) =>
       log.info(s"bid $amount too low (current price: ${auctionData.startingPrice})")
@@ -71,6 +72,8 @@ class Auction(seller: ActorRef, startingPrice: BigDecimal) extends FSM[AuctionSt
 
   when(Activated, stateTimeout = Timer.BidDuration) {
     case Event(Bid(amount), auctionData: ActivatedAuction) if amount > auctionData.currentPrice =>
+      sender ! AuctionMessage.BidAccepted(amount)
+      auctionData.highestBidder ! AuctionMessage.OutBid(amount)
       stay using ActivatedAuction(auctionData.seller, sender(), amount)
     case Event(Bid(amount), auctionData: ActivatedAuction) =>
       log.info(s"$stateName: bid $amount too low (current price: ${auctionData.currentPrice})")
@@ -103,7 +106,7 @@ object AuctionApp extends App {
   val auctionSearch = system.actorOf(Props[AuctionSearch], AuctionSearch.Name)
   val seller1 = system.actorOf(Seller.props(auctionList), "seller1")
 
-  val buyer1 = system.actorOf(Props[Buyer], "buyer1")
+  val buyer1 = system.actorOf(Props(classOf[Buyer], 2000), "buyer1")
 
   import system.dispatcher
 

@@ -4,33 +4,34 @@ import akka.actor.{Stash, Actor, ActorRef}
 import akka.event.{Logging, LoggingReceive}
 import reactive.AuctionMessage.{FindAndBid, ItemSold}
 
-object Buyer {
-  val MaxAmount = 500
-}
-
-class Buyer extends Actor with Stash {
+class Buyer(initialMoney: BigDecimal) extends Actor with Stash {
   val log = Logging(context.system, this)
   val rand = scala.util.Random
 
-  def bidAuctions: Receive = LoggingReceive {
+  def bidAuctions(moneyLeft: BigDecimal): Receive = LoggingReceive {
     case FindAndBid(name, amount) =>
       context.actorSelection("/user/" + AuctionSearch.Name) ! AuctionSearch.GetAuctions(name)
-      context become waitingForAuctionList(amount)
+    context become waitingForAuctionList(moneyLeft, amount)
+    case AuctionMessage.BidAccepted(amount) =>
+      context become bidAuctions(if (moneyLeft - amount > 0) moneyLeft - amount else 0)
+    case AuctionMessage.OutBid(amount) =>
+      if (moneyLeft > amount)
+        sender ! AuctionMessage.Bid(amount+1)
     case ItemSold => println(s"${self.path.name} bought ${sender.path.name}!")
     case _ => //ignore
   }
 
-  def waitingForAuctionList(amountToBid: BigDecimal) = LoggingReceive {
+  def waitingForAuctionList(moneyLeft: BigDecimal, amountToBid: BigDecimal) = LoggingReceive {
     case AuctionSearch.AuctionList(auctions: List[ActorRef]) =>
-      if (auctions.length > 0)
-        auctions(rand.nextInt(auctions.length)) ! AuctionMessage.Bid(rand.nextInt(Buyer.MaxAmount))
+      if (auctions.nonEmpty)
+        auctions(rand.nextInt(auctions.length)) ! AuctionMessage.Bid(amountToBid)
       else
         log.error("Auction not found! Bid not made.")
       unstashAll()
-      context become bidAuctions
+      context become bidAuctions(moneyLeft)
     case _ => stash()
   }
 
-  override def receive = bidAuctions
+  override def receive = bidAuctions(initialMoney)
 
 }
