@@ -1,7 +1,7 @@
 package reactive
 
 import akka.actor._
-import reactive.AuctionMessage.{Bid, ItemSold, Relist, StartAuction}
+import reactive.AuctionMessage.{Bid, ItemSold, Relist}
 
 import scala.concurrent.duration._
 
@@ -26,7 +26,7 @@ final case class InitializedAuction(seller: ActorRef, startingPrice: BigDecimal)
   require(startingPrice > 0)
 }
 
-final case class ActivatedAuction(highestBidder: ActorRef, seller: ActorRef, currentPrice: BigDecimal) extends AuctionData {
+final case class ActivatedAuction(seller: ActorRef, highestBidder: ActorRef, currentPrice: BigDecimal) extends AuctionData {
   require(currentPrice > 0)
 }
 
@@ -35,19 +35,26 @@ object Timer {
   val DeleteDuration = 3 seconds
 }
 
-class Auction extends FSM[AuctionState, AuctionData] {
+case object Initialize
 
+class Auction(seller: ActorRef, startingPrice: BigDecimal) extends FSM[AuctionState, AuctionData] with Stash {
+  println(s"${self.path}")
   startWith(InitialState, Uninitialized)
+  self ! Initialize
 
   when(InitialState) {
-    case Event(StartAuction(startingPrice), Uninitialized) =>
+    case Event(Initialize, Uninitialized) =>
       context.actorSelection("/user/" + AuctionSearch.Name) ! AuctionSearch.Register
-      goto(Created) using InitializedAuction(sender(), startingPrice)
+      unstashAll()
+      goto(Created) using InitializedAuction(seller, startingPrice)
+    case _ =>
+      stash()
+      stay()
   }
 
   when(Created, stateTimeout = Timer.BidDuration) {
     case Event(Bid(amount), auctionData: InitializedAuction) if amount > auctionData.startingPrice =>
-      goto(Activated) using ActivatedAuction(sender(), auctionData.seller, amount)
+      goto(Activated) using ActivatedAuction(auctionData.seller, sender(), amount)
     case Event(Bid(amount), auctionData: InitializedAuction) =>
       log.info(s"bid $amount too low (current price: ${auctionData.startingPrice})")
       stay()
@@ -64,7 +71,7 @@ class Auction extends FSM[AuctionState, AuctionData] {
 
   when(Activated, stateTimeout = Timer.BidDuration) {
     case Event(Bid(amount), auctionData: ActivatedAuction) if amount > auctionData.currentPrice =>
-      stay using ActivatedAuction(sender(), auctionData.seller, amount)
+      stay using ActivatedAuction(auctionData.seller, sender(), amount)
     case Event(Bid(amount), auctionData: ActivatedAuction) =>
       log.info(s"$stateName: bid $amount too low (current price: ${auctionData.currentPrice})")
       stay()

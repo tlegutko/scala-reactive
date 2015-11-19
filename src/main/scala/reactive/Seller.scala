@@ -3,7 +3,6 @@ package reactive
 import akka.actor.{Actor, ActorRef, Props}
 import akka.event.LoggingReceive
 import reactive.AuctionMessage.ItemSold
-import reactive.Seller.Initialize
 
 object Seller {
   def props(auctionTitles: List[String]): Props = Props(new Seller(auctionTitles))
@@ -21,10 +20,8 @@ class Seller(auctionTitles: List[String]) extends Actor {
 
   def uninitialized = LoggingReceive {
     case Initialize =>
-      auctionTitles.foreach(title => {
-        val auction = context.system.actorOf(Props[Auction], title)
-        auction ! AuctionMessage.StartAuction(rand.nextInt(Seller.MaxPrice))
-      })
+      auctionTitles.map(title =>
+        context.actorOf(Props(classOf[Auction], self, BigDecimal(rand.nextInt(Seller.MaxPrice))), title))
       context become active
     case _ => // ignore
   }

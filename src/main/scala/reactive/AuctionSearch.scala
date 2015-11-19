@@ -1,7 +1,7 @@
 package reactive
 
 import akka.actor.{Actor, ActorRef}
-import akka.event.LoggingReceive
+import akka.event.{Logging, LoggingReceive}
 
 object AuctionSearch {
 
@@ -17,9 +17,11 @@ object AuctionSearch {
 
 class AuctionSearch extends Actor {
   var auctions = List[ActorRef]()
+  val log = Logging(context.system, this)
 
   override def receive = LoggingReceive {
     case AuctionSearch.Register => auctions = sender() :: auctions
+      log.info(s"received registration from ${sender().path}!")
     case AuctionSearch.GetAuctions(name) =>
       sender ! AuctionSearch.AuctionList(auctions.filter(actor => actor.path.name contains name))
     case _ => // ignore

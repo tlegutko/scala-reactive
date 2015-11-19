@@ -1,14 +1,15 @@
 package reactive
 
 import akka.actor.{Stash, Actor, ActorRef}
-import akka.event.LoggingReceive
+import akka.event.{Logging, LoggingReceive}
 import reactive.AuctionMessage.{FindAndBid, ItemSold}
 
 object Buyer {
-  val MaxAmount = 500;
+  val MaxAmount = 500
 }
 
 class Buyer extends Actor with Stash {
+  val log = Logging(context.system, this)
   val rand = scala.util.Random
 
   def bidAuctions: Receive = LoggingReceive {
@@ -21,7 +22,10 @@ class Buyer extends Actor with Stash {
 
   def waitingForAuctionList(amountToBid: BigDecimal) = LoggingReceive {
     case AuctionSearch.AuctionList(auctions: List[ActorRef]) =>
-      auctions(rand.nextInt(auctions.length)) ! AuctionMessage.Bid(rand.nextInt(Buyer.MaxAmount))
+      if (auctions.length > 0)
+        auctions(rand.nextInt(auctions.length)) ! AuctionMessage.Bid(rand.nextInt(Buyer.MaxAmount))
+      else
+        log.error("Auction not found! Bid not made.")
       unstashAll()
       context become bidAuctions
     case _ => stash()
