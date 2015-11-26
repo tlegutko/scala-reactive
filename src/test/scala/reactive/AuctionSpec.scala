@@ -1,13 +1,14 @@
 package reactive
 
 import akka.actor.{ActorSystem, Props}
-import scala.concurrent.duration._
 import akka.testkit.{ImplicitSender, TestKit, TestProbe}
 import org.scalatest.{BeforeAndAfterAll, WordSpecLike}
 
+import scala.concurrent.duration._
+
 class AuctionSpec extends TestKit(ActorSystem("Reactive2")) with WordSpecLike with BeforeAndAfterAll with ImplicitSender {
   override def afterAll(): Unit = {
-    system.shutdown()
+    system.terminate()
   }
 
   "An Auction" must {
@@ -17,8 +18,8 @@ class AuctionSpec extends TestKit(ActorSystem("Reactive2")) with WordSpecLike wi
       import system.dispatcher
       system.scheduler.scheduleOnce(200 milliseconds) {
         auctionSearch ! AuctionSearch.GetAuctions("auction")
+        expectMsg(AuctionSearch.AuctionList(List(auction.path)))
       }
-      expectMsg(AuctionSearch.AuctionList(List(auction)))
     }
 
     "send notifications when sold" in {
@@ -28,11 +29,10 @@ class AuctionSpec extends TestKit(ActorSystem("Reactive2")) with WordSpecLike wi
       import system.dispatcher
       system.scheduler.scheduleOnce(200 milliseconds) {
         auction2 ! AuctionMessage.Bid(30)
-
+        expectMsg(AuctionMessage.BidAccepted(30))
+        seller.expectMsg(4 seconds, AuctionMessage.ItemSold)
+        expectMsg(4 seconds, AuctionMessage.ItemSold)
       }
-      expectMsg(AuctionMessage.BidAccepted(30))
-      seller.expectMsg(4 seconds, AuctionMessage.ItemSold)
-      expectMsg(AuctionMessage.ItemSold)
     }
 
     "notify buyer when his offer is outbid" in {

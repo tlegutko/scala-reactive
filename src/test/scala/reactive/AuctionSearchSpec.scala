@@ -7,7 +7,7 @@ import org.scalatest.{BeforeAndAfterAll, WordSpecLike}
 class AuctionSearchSpec extends TestKit(ActorSystem("Reactive2")) with WordSpecLike with BeforeAndAfterAll with ImplicitSender {
 
   override def afterAll(): Unit = {
-    system.shutdown()
+    system.terminate()
   }
 
   "AuctionSearch" must {
@@ -18,19 +18,19 @@ class AuctionSearchSpec extends TestKit(ActorSystem("Reactive2")) with WordSpecL
 
       auctionSearch ! AuctionSearch.Register
       auctionSearch ! AuctionSearch.GetAuctions(self.path.name)
-      expectMsg(AuctionSearch.AuctionList(List(self)))
+      expectMsg(AuctionSearch.AuctionList(List(self.path)))
 
       val secondActor = TestProbe()
       secondActor.send(auctionSearch, AuctionSearch.Register)
       auctionSearch ! AuctionSearch.GetAuctions("test")
-      expectMsg(AuctionSearch.AuctionList(List(secondActor.ref, self)))
+      expectMsg(AuctionSearch.AuctionList(List(secondActor.ref.path, self.path)))
     }
 
     "filter registered auctions by name" in {
       val auctionSearch = system.actorOf(Props[AuctionSearch])
       auctionSearch ! AuctionSearch.Register
       auctionSearch ! AuctionSearch.GetAuctions(self.path.name)
-      expectMsg(AuctionSearch.AuctionList(List(self)))
+      expectMsg(AuctionSearch.AuctionList(List(self.path)))
       auctionSearch ! AuctionSearch.GetAuctions("not_my_name")
       expectMsg(AuctionSearch.AuctionList(List.empty))
     }

@@ -9,7 +9,7 @@ import org.scalatest._
 
 class SellerSpec extends TestKit(ActorSystem("Reactive2")) with WordSpecLike with BeforeAndAfterAll with ImplicitSender {
   override def afterAll(): Unit = {
-    system.shutdown()
+    system.terminate()
   }
   "A Seller" must {
     "create auction from list of titles" in {

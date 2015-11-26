@@ -1,52 +1,85 @@
 package reactive
 
+import java.util.Date
+
 import akka.actor._
+import akka.event.LoggingReceive
+import akka.persistence.{SnapshotOffer, RecoveryCompleted}
+import akka.persistence.fsm.PersistentFSM
+import akka.persistence.fsm.PersistentFSM.FSMState
+import reactive.Auction.{Timer, Initialize}
+import reactive.AuctionData.{ActivatedAuction, InitializedAuction, Uninitialized}
 import reactive.AuctionMessage.{Bid, ItemSold, Relist}
+import reactive.AuctionState._
 
+import scala.concurrent.Await
 import scala.concurrent.duration._
+import scala.reflect._
 
-sealed trait AuctionState
+sealed trait AuctionState extends FSMState
 
-case object InitialState extends AuctionState
+object AuctionState {
+  case object InitialState extends AuctionState {
+    override def identifier: String = "InitialState"
+  }
 
-case object Created extends AuctionState
+  case object Created extends AuctionState {
+    override def identifier: String = "Created"
+  }
 
-case object Activated extends AuctionState
+  case object Activated extends AuctionState {
+    override def identifier: String = "Activated"
+  }
 
-case object Ignored extends AuctionState
+  case object Ignored extends AuctionState {
+    override def identifier: String = "Ignored"
+  }
 
-case object Sold extends AuctionState
+  case object Sold extends AuctionState {
+    override def identifier: String = "Sold"
+  }
+}
 
+case class AuctionEvent()
 
 sealed trait AuctionData
 
-case object Uninitialized extends AuctionData
+object AuctionData {
+  case class Uninitialized(date: Date) extends AuctionData
 
-final case class InitializedAuction(seller: ActorRef, startingPrice: BigDecimal) extends AuctionData {
-  require(startingPrice > 0)
+  final case class InitializedAuction(seller: ActorPath, startingPrice: BigDecimal) extends AuctionData {
+    require(startingPrice > 0)
+  }
+
+  final case class ActivatedAuction(seller: ActorPath, highestBidder: ActorPath, currentPrice: BigDecimal) extends AuctionData {
+    require(currentPrice > 0)
+  }
 }
 
-final case class ActivatedAuction(seller: ActorRef, highestBidder: ActorRef, currentPrice: BigDecimal) extends AuctionData {
-  require(currentPrice > 0)
+object Auction {
+  object Timer {
+    val BidDuration = 5 seconds
+    val DeleteDuration = 5 seconds
+  }
+
+  case class Initialize(date: Date)
+
 }
 
-object Timer {
-  val BidDuration = 3 seconds
-  val DeleteDuration = 3 seconds
-}
+class Auction(seller: ActorPath, startingPrice: BigDecimal) extends PersistentFSM[AuctionState, AuctionData, AuctionData] with Stash {
 
-case object Initialize
+  override def persistenceId = self.path.name
+  override def domainEventClassTag: ClassTag[AuctionData] = classTag[AuctionData]
 
-class Auction(seller: ActorRef, startingPrice: BigDecimal) extends FSM[AuctionState, AuctionData] with Stash {
-  println(s"${self.path}")
-  startWith(InitialState, Uninitialized)
-  self ! Initialize
+  startWith(InitialState, Uninitialized(new Date()))
+  self ! Initialize(new Date())
 
   when(InitialState) {
-    case Event(Initialize, Uninitialized) =>
+    case Event(Initialize(date), Uninitialized(initialDate)) =>
+      log.info(date.toString)
       context.actorSelection("/user/" + AuctionSearch.Name) ! AuctionSearch.Register
       unstashAll()
-      goto(Created) using InitializedAuction(seller, startingPrice)
+      goto(Created) applying InitializedAuction(seller, startingPrice)
     case _ =>
       stash()
       stay()
@@ -55,33 +88,34 @@ class Auction(seller: ActorRef, startingPrice: BigDecimal) extends FSM[AuctionSt
   when(Created, stateTimeout = Timer.BidDuration) {
     case Event(Bid(amount), auctionData: InitializedAuction) if amount > auctionData.startingPrice =>
       sender ! AuctionMessage.BidAccepted(amount)
-      goto(Activated) using ActivatedAuction(auctionData.seller, sender(), amount)
+      goto(Activated) applying ActivatedAuction(auctionData.seller, sender.path, amount)
     case Event(Bid(amount), auctionData: InitializedAuction) =>
       log.info(s"bid $amount too low (current price: ${auctionData.startingPrice})")
       stay()
     case Event(StateTimeout, auctionData: InitializedAuction) =>
-      goto(Ignored) using auctionData
+      goto(Ignored) applying auctionData
   }
 
   when(Ignored, stateTimeout = Timer.DeleteDuration) {
     case Event(Relist, auctionData: InitializedAuction) =>
-      goto(Created) using auctionData
+      goto(Created) applying auctionData
     case Event(StateTimeout, auctionData: InitializedAuction) =>
+      log.info("Auction finished without buyer!")
       stop()
   }
 
   when(Activated, stateTimeout = Timer.BidDuration) {
     case Event(Bid(amount), auctionData: ActivatedAuction) if amount > auctionData.currentPrice =>
       sender ! AuctionMessage.BidAccepted(amount)
-      auctionData.highestBidder ! AuctionMessage.OutBid(amount)
-      stay using ActivatedAuction(auctionData.seller, sender(), amount)
+      context.actorSelection(auctionData.highestBidder) ! AuctionMessage.OutBid(amount)
+      stay applying ActivatedAuction(auctionData.seller, sender.path, amount)
     case Event(Bid(amount), auctionData: ActivatedAuction) =>
       log.info(s"$stateName: bid $amount too low (current price: ${auctionData.currentPrice})")
       stay()
     case Event(StateTimeout, auctionData: ActivatedAuction) =>
-      auctionData.seller ! ItemSold
-      auctionData.highestBidder ! ItemSold
-      goto(Sold) using auctionData
+      context.actorSelection(auctionData.seller) ! ItemSold
+      context.actorSelection(auctionData.highestBidder) ! ItemSold
+      goto(Sold) applying auctionData
   }
 
   when(Sold, stateTimeout = Timer.DeleteDuration) {
@@ -95,27 +129,21 @@ class Auction(seller: ActorRef, startingPrice: BigDecimal) extends FSM[AuctionSt
       stay()
   }
 
-  initialize()
-}
-
-object AuctionApp extends App {
-  val system = ActorSystem("Reactive2")
-
-  val auctionList = List("czadowy_komputer", "krzeslo_mistrzow", "krzywy_stol", "zamkniete_drzwi")
-
-  val auctionSearch = system.actorOf(Props[AuctionSearch], AuctionSearch.Name)
-  val seller1 = system.actorOf(Seller.props(auctionList), "seller1")
-
-  val buyer1 = system.actorOf(Props(classOf[Buyer], 2000), "buyer1")
-
-  import system.dispatcher
-
-  system.scheduler.scheduleOnce(1 second) {
-    buyer1 ! AuctionMessage.FindAndBid("komputer", 400)
-    buyer1 ! AuctionMessage.FindAndBid("krzeslo", 400)
-    buyer1 ! AuctionMessage.FindAndBid("stol", 400)
+  override def applyEvent(event: AuctionData, data: AuctionData): AuctionData = {
+    println("event: " + event.toString)
+    event
   }
 
-  system.awaitTermination()
+  override def receiveRecover = LoggingReceive {
+    case RecoveryCompleted =>
+      log.info(s"current time: ${new Date().toString}")
+      log.info(s"Successfully recovered ${self.path.name}")
+      log.info(s"${stateData.toString}")
+    case SnapshotOffer(_, offeredSnapshot) =>
+      log.info(offeredSnapshot.toString)
+    case evt =>
+      println("gotcha " + evt.toString)
+  }
 
+  initialize()
 }

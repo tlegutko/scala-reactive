@@ -1,6 +1,6 @@
 package reactive
 
-import akka.actor.{Stash, Actor, ActorRef}
+import akka.actor.{ActorPath, Stash, Actor, ActorRef}
 import akka.event.{Logging, LoggingReceive}
 import reactive.AuctionMessage.{FindAndBid, ItemSold}
 
@@ -22,9 +22,9 @@ class Buyer(initialMoney: BigDecimal) extends Actor with Stash {
   }
 
   def waitingForAuctionList(moneyLeft: BigDecimal, amountToBid: BigDecimal) = LoggingReceive {
-    case AuctionSearch.AuctionList(auctions: List[ActorRef]) =>
+    case AuctionSearch.AuctionList(auctions: List[ActorPath]) =>
       if (auctions.nonEmpty)
-        auctions(rand.nextInt(auctions.length)) ! AuctionMessage.Bid(amountToBid)
+        context.actorSelection(auctions(rand.nextInt(auctions.length))) ! AuctionMessage.Bid(amountToBid)
       else
         log.error("Auction not found! Bid not made.")
       unstashAll()

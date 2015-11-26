@@ -9,7 +9,7 @@ import scala.concurrent.duration._
 
 class BuyerSpec extends TestKit(ActorSystem("Reactive2")) with WordSpecLike with BeforeAndAfterAll with ImplicitSender {
   override def afterAll(): Unit = {
-    system.shutdown()
+    system.terminate()
   }
 
   override def beforeAll(): Unit = {
