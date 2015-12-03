@@ -33,7 +33,7 @@ case object Sold extends AuctionState {
 
 sealed trait AuctionEvent
 
-case class AuctionInitialized(seller: ActorPath, initialPrice: Int) extends AuctionEvent
+case class AuctionInitialized(seller: ActorPath, initialPrice: Int, startingTime: FiniteDuration) extends AuctionEvent
 
 case class AuctionBid(seller: ActorPath, currentPrice: Int, highestBidder: ActorPath) extends AuctionEvent
 
@@ -44,9 +44,13 @@ sealed trait AuctionData {
 
   def bidAuction(seller: ActorPath, currentPrice: Int, highestBidder: ActorPath, timeLeft: FiniteDuration): AuctionData
 
-  def timeLeft: FiniteDuration
+  def startingTime: FiniteDuration
 
-  def endAuction: AuctionData = SoldAuction
+  def endAuction: AuctionData = SoldAuction(startingTime)
+
+  def timeLeft: FiniteDuration = time
+
+  var time: FiniteDuration = 5 seconds
 
 }
 
@@ -54,40 +58,38 @@ case class UninitializedAuction() extends AuctionData {
   override def initializeAuction(seller: ActorPath, initialPrice: Int, timeLeft: FiniteDuration): AuctionData =
     CreatedAuction(seller, initialPrice, timeLeft)
 
-  override def bidAuction(seller: ActorPath, currentPrice: Int, highestBidder: ActorPath, timeLeft: FiniteDuration): AuctionData = ???
+  override def bidAuction(seller: ActorPath, currentPrice: Int, highestBidder: ActorPath, startingTime: FiniteDuration): AuctionData = ???
 
-  override def timeLeft: FiniteDuration = FiniteDuration(5, SECONDS)
+  override def startingTime: FiniteDuration = FiniteDuration(System.currentTimeMillis(), MILLISECONDS)
 }
 
-case class CreatedAuction(seller: ActorPath, currentPrice: Int, timeLeft: FiniteDuration) extends AuctionData {
-  override def initializeAuction(seller: ActorPath, initialPrice: Int, timeLeft: FiniteDuration): AuctionData = ???
+case class CreatedAuction(seller: ActorPath, currentPrice: Int, startingTime: FiniteDuration) extends AuctionData {
+  override def initializeAuction(seller: ActorPath, initialPrice: Int, startingTime: FiniteDuration): AuctionData = ???
 
-  override def bidAuction(seller: ActorPath, currentPrice: Int, highestBidder: ActorPath, timeLeft: FiniteDuration): AuctionData =
-    ActiveAuction(seller, currentPrice, highestBidder, timeLeft)
-
+  override def bidAuction(seller: ActorPath, currentPrice: Int, highestBidder: ActorPath, startingTime: FiniteDuration): AuctionData =
+    ActiveAuction(seller, currentPrice, highestBidder, startingTime)
 }
 
-case class ActiveAuction(seller: ActorPath, currentPrice: Int, highestBidder: ActorPath, timeLeft: FiniteDuration)
+case class ActiveAuction(seller: ActorPath, currentPrice: Int, highestBidder: ActorPath, startingTime: FiniteDuration)
   extends AuctionData {
-  override def initializeAuction(seller: ActorPath, initialPrice: Int, timeLeft: FiniteDuration): AuctionData = ???
+  override def initializeAuction(seller: ActorPath, initialPrice: Int, startingTime: FiniteDuration): AuctionData = ???
 
-  override def bidAuction(seller: ActorPath, currentPrice: Int, highestBidder: ActorPath, timeLeft: FiniteDuration): AuctionData =
-    ActiveAuction(seller, currentPrice, highestBidder, timeLeft)
+  override def bidAuction(seller: ActorPath, currentPrice: Int, highestBidder: ActorPath, startingTime: FiniteDuration): AuctionData =
+    ActiveAuction(seller, currentPrice, highestBidder, startingTime)
 }
 
-case object SoldAuction extends AuctionData {
-  override def initializeAuction(seller: ActorPath, initialPrice: Int, timeLeft: FiniteDuration): AuctionData =
-    SoldAuction
+case class SoldAuction(startingTime: FiniteDuration) extends AuctionData {
+  override def initializeAuction(seller: ActorPath, initialPrice: Int, startingTime: FiniteDuration): AuctionData =
+    SoldAuction(startingTime)
 
-  override def bidAuction(seller: ActorPath, currentPrice: Int, highestBidder: ActorPath, timeLeft: FiniteDuration):
-  AuctionData = SoldAuction
+  override def bidAuction(seller: ActorPath, currentPrice: Int, highestBidder: ActorPath, startingTime: FiniteDuration):
+  AuctionData = SoldAuction(startingTime)
 
-  override def timeLeft: FiniteDuration = FiniteDuration(0, SECONDS)
 }
 
 sealed trait Command
 
-case object Initialize extends Command
+case class Initialize(startingTime: FiniteDuration) extends Command
 
 case class Bid(amount: Int) extends Command
 
@@ -106,7 +108,6 @@ case class ItemSold(amount: Int) extends Notification
 
 case object ItemAlreadySold extends Notification
 
-
 class Auction(seller: ActorPath, startingPrice: Int) extends PersistentFSM[AuctionState, AuctionData, AuctionEvent] {
 
   override def persistenceId = self.path.name
@@ -114,12 +115,12 @@ class Auction(seller: ActorPath, startingPrice: Int) extends PersistentFSM[Aucti
   override def domainEventClassTag: ClassTag[AuctionEvent] = classTag[AuctionEvent]
 
   startWith(InitialState, UninitializedAuction())
-  self ! Initialize
+  self ! Initialize(FiniteDuration(System.currentTimeMillis(), MILLISECONDS))
 
   when(InitialState) {
-    case Event(Initialize, auctionData: UninitializedAuction) =>
+    case Event(Initialize(startingTime), auctionData: UninitializedAuction) =>
       context.actorSelection("/user/" + AuctionSearch.Name) ! AuctionSearch.Register
-      goto(Created) applying AuctionInitialized(seller, startingPrice) forMax (auctionData.timeLeft)
+      goto(Created) applying AuctionInitialized(seller, startingPrice, startingTime) forMax (auctionData.timeLeft)
   }
 
   when(Created) {
@@ -169,15 +170,19 @@ class Auction(seller: ActorPath, startingPrice: Int) extends PersistentFSM[Aucti
       stay()
   }
 
+  def timeDiff(startingTime: FiniteDuration, howLong: FiniteDuration): FiniteDuration = {
+    FiniteDuration(System.currentTimeMillis(), MILLISECONDS) - startingTime - howLong
+  }
+
   override def applyEvent(event: AuctionEvent, data: AuctionData): AuctionData = {
     println(s"applyEvent: ${event} / ${data}")
     //    data match {
     //      case SoldAuction => println("haha!"); SoldAuction
     //      case _ =>
     event match {
-      case AuctionInitialized(seller, initialPrice) => data.initializeAuction(seller, initialPrice, data.timeLeft)
+      case AuctionInitialized(seller, initialPrice, startingTime) => data.initializeAuction(seller, initialPrice, startingTime)
       case AuctionBid(seller, currentPrice, highestBidder) => data.bidAuction(seller, currentPrice, highestBidder,
-        data.timeLeft)
+        data.startingTime)
       case AuctionSold => data.endAuction
       //      case AuctionInitialized(seller, initialPrice) => CreatedAuction(seller, initialPrice, 5 seconds)
       //      case AuctionBid(seller, currentPrice, highestBidder) => ActiveAuction(seller, currentPrice, highestBidder, 5
@@ -191,10 +196,19 @@ class Auction(seller: ActorPath, startingPrice: Int) extends PersistentFSM[Aucti
 
   override def receiveRecover = LoggingReceive {
     case RecoveryCompleted =>
-      println(s"recovery completed in ${stateName}/{$recoveryData}")
-      if (recoveryData.timeLeft <= 0.second) {
-        self ! AuctionAlreadyFinished
+//      println(s"recovery completed in ${stateName}/{$recoveryData}")
+      recoveryData match {
+      case UninitializedAuction() => // uninitialized, do nothing
+      case SoldAuction(_) => stateData.time = 0.seconds; self ! AuctionAlreadyFinished
+      case _ => {
+        stateData.time = timeDiff(recoveryData.startingTime, 0 seconds)
+        if (stateData.time < 0.second) {
+          printf("already finished!")
+          self ! AuctionAlreadyFinished
+        }
       }
+    }
+      println(s"time left: ${stateData.time}");
     case evt: AuctionEvent =>
       recoveryData = applyEvent(evt, recoveryData)
     case evt =>
