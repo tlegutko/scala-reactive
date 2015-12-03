@@ -3,6 +3,7 @@ package reactive
 import akka.actor.{ActorSystem, Props}
 import akka.testkit.{ImplicitSender, TestKit}
 import org.scalatest.{BeforeAndAfterAll, WordSpecLike}
+import reactive.Buyer.FindAndBid
 
 import scala.concurrent.duration._
 
@@ -22,11 +23,11 @@ class BuyerSpec extends TestKit(ActorSystem("Reactive2")) with WordSpecLike with
       val auction = system.actorOf(Props(classOf[Auction], self, BigDecimal(200)), "awesome_auction")
       import system.dispatcher
       system.scheduler.scheduleOnce(200 milliseconds) {
-        buyer ! AuctionMessage.FindAndBid("auction", 200)
-        auction ! AuctionMessage.Bid(250)
+        buyer ! FindAndBid("auction", 200)
+        auction ! Bid(250)
 
-        expectMsg(AuctionMessage.BidAccepted(250))
-        expectMsg(AuctionMessage.OutBid(251))
+        expectMsg(BidAccepted(250))
+        expectMsg(OutBid(251))
       }
     }
     "not rebid, when his financial situation disallows it" in {
@@ -34,9 +35,9 @@ class BuyerSpec extends TestKit(ActorSystem("Reactive2")) with WordSpecLike with
       val auction = system.actorOf(Props(classOf[Auction], self, BigDecimal(200)), "awesome_auction2")
       import system.dispatcher
       system.scheduler.scheduleOnce(200 milliseconds) {
-        buyer ! AuctionMessage.FindAndBid("auction2", 200)
-        auction ! AuctionMessage.Bid(250)
-        expectMsg(AuctionMessage.BidAccepted(250))
+        buyer ! FindAndBid("auction2", 200)
+        auction ! Bid(250)
+        expectMsg(BidAccepted(250))
         expectNoMsg() // so this test actor is not outbid
       }
     }

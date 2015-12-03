@@ -28,10 +28,10 @@ class AuctionSpec extends TestKit(ActorSystem("Reactive2")) with WordSpecLike wi
 
       import system.dispatcher
       system.scheduler.scheduleOnce(200 milliseconds) {
-        auction2 ! AuctionMessage.Bid(30)
-        expectMsg(AuctionMessage.BidAccepted(30))
-        seller.expectMsg(4 seconds, AuctionMessage.ItemSold)
-        expectMsg(4 seconds, AuctionMessage.ItemSold)
+        auction2 ! Bid(30)
+        expectMsg(BidAccepted(30))
+        seller.expectMsg(4 seconds, ItemSold)
+        expectMsg(4 seconds, ItemSold)
       }
     }
 
@@ -41,9 +41,9 @@ class AuctionSpec extends TestKit(ActorSystem("Reactive2")) with WordSpecLike wi
 
       import system.dispatcher
       system.scheduler.scheduleOnce(200 milliseconds) {
-        auction3 ! AuctionMessage.Bid(30)
-        auction3 ! AuctionMessage.Bid(35)
-        expectMsg(AuctionMessage.OutBid(35))
+        auction3 ! Bid(30)
+        auction3 ! Bid(35)
+        expectMsg(OutBid(35))
       }
     }
   }
