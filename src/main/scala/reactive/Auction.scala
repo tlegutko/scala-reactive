@@ -108,6 +108,10 @@ case class ItemSold(amount: Int) extends Notification
 
 case object ItemAlreadySold extends Notification
 
+case class AuctionBidAccepted(amount: Int, name: String, bidder: ActorPath) extends Notification
+
+case class AuctionFinished(amount: Int, name: String, bidder: ActorPath) extends Notification
+
 class Auction(seller: ActorPath, startingPrice: Int) extends PersistentFSM[AuctionState, AuctionData, AuctionEvent] {
 
   override def persistenceId = self.path.name
@@ -126,6 +130,7 @@ class Auction(seller: ActorPath, startingPrice: Int) extends PersistentFSM[Aucti
   when(Created) {
     case Event(Bid(amount), auctionData: CreatedAuction) if amount > auctionData.currentPrice =>
       log.info("created")
+      context.actorSelection("/user/" + Notifier.Name) ! AuctionBidAccepted(amount, self.path.name, sender.path)
       goto(Activated) applying AuctionBid(auctionData.seller, amount, sender.path) forMax (auctionData.timeLeft) replying BidAccepted(amount)
     case Event(Bid(amount), auctionData: CreatedAuction) =>
       //      log.info(s"$stateName: bid $amount too low (current price: ${auctionData.currentPrice})")
@@ -154,6 +159,8 @@ class Auction(seller: ActorPath, startingPrice: Int) extends PersistentFSM[Aucti
     case Event(StateTimeout, auctionData: ActiveAuction) =>
       context.actorSelection(auctionData.seller) ! ItemSold(auctionData.currentPrice)
       context.actorSelection(auctionData.highestBidder) ! ItemSold(auctionData.currentPrice)
+      context.actorSelection("/user/" + Notifier.Name) ! AuctionFinished(auctionData.currentPrice, self.path.name,
+        auctionData.highestBidder)
       goto(Sold) applying AuctionSold forMax (auctionData.timeLeft)
   }
 
@@ -194,8 +201,13 @@ class Auction(seller: ActorPath, startingPrice: Int) extends PersistentFSM[Aucti
 
   var recoveryData: AuctionData = UninitializedAuction()
 
+//  override def onRecoveryCompleted = LoggingReceive {
+//    case RecoveryCompleted => // ignore
+//  }
+
   override def receiveRecover = LoggingReceive {
     case RecoveryCompleted =>
+      super.receiveRecover
 //      println(s"recovery completed in ${stateName}/{$recoveryData}")
       recoveryData match {
       case UninitializedAuction() => // uninitialized, do nothing
@@ -208,7 +220,6 @@ class Auction(seller: ActorPath, startingPrice: Int) extends PersistentFSM[Aucti
         }
       }
     }
-      println(s"time left: ${stateData.time}");
     case evt: AuctionEvent =>
       recoveryData = applyEvent(evt, recoveryData)
     case evt =>
